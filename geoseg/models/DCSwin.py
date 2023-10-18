@@ -947,7 +947,7 @@ def dcswin_small(pretrained=True, num_classes=4, weight_path='pretrain_weights/s
     return model
 
 
-def dcswin_tiny(pretrained=True, num_classes=4, weight_path='pretrain_weights/stseg_tiny.pth'):
+def dcswin_tiny(pretrained=True, num_classes=4, weight_path='/data2/wangyuji/Geoseg/model_weights/vaihingen/stseg_tiny.pth'):
     model = DCSwin(encoder_channels=(96, 192, 384, 768),
                    num_classes=num_classes,
                    embed_dim=96,

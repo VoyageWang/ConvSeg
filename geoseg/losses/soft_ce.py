@@ -22,7 +22,11 @@ class SoftCrossEntropyLoss(nn.Module):
         self.dim = dim
 
     def forward(self, input: Tensor, target: Tensor) -> Tensor:
+        # print(input.shape)
+        # print("i am here")
+        # print(type(input))
         log_prob = F.log_softmax(input, dim=self.dim)
+        
         return label_smoothed_nll_loss(
             log_prob,
             target,

@@ -826,4 +826,6 @@ if __name__ == '__main__':
     model_base = rest_base(nclass=6, aux=False, edge_aux=False, head='mlphead', pretrained=False)
     out = model_base(a)
     print(out.shape)
+    from speed import speed
+    speed(model_base)
     

@@ -277,4 +277,9 @@ class A2FPN(nn.Module):
         out = F.interpolate(out, scale_factor=4, mode='bilinear', align_corners=True)
 
         return out
+    
+if __name__ == "__main__":
+    model = A2FPN()
+    from speed import speed
+    speed(model)
 

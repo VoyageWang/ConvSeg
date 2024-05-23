@@ -65,28 +65,28 @@ def main():
     config = py2cfg(args.config_path)
     args.output_path.mkdir(exist_ok=True, parents=True)
     model = Supervision_Train.load_from_checkpoint(os.path.join(config.weights_path, config.test_weights_name+'.ckpt'), config=config)
-    model.cuda()
-    model.eval()
+    model.cuda(config.gpus[0])
     evaluator = Evaluator(num_class=config.num_classes)
     evaluator.reset()
-    if args.tta == "lr":
-        transforms = tta.Compose(
-            [
-                tta.HorizontalFlip(),
-                tta.VerticalFlip()
-            ]
-        )
-        model = tta.SegmentationTTAWrapper(model, transforms)
-    elif args.tta == "d4":
-        transforms = tta.Compose(
-            [
-                tta.HorizontalFlip(),
-                tta.VerticalFlip(),
-                tta.Rotate90(angles=[90]),
-                tta.Scale(scales=[0.5, 0.75, 1.0, 1.25, 1.5], interpolation='bicubic', align_corners=False)
-            ]
-        )
-        model = tta.SegmentationTTAWrapper(model, transforms)
+    model.eval()
+    # if args.tta == "lr":
+    #     transforms = tta.Compose(
+    #         [
+    #             tta.HorizontalFlip(),
+    #             tta.VerticalFlip()
+    #         ]
+    #     )
+    #     model = tta.SegmentationTTAWrapper(model, transforms)
+    # elif args.tta == "d4":
+    #     transforms = tta.Compose(
+    #         [
+    #             tta.HorizontalFlip(),
+    #             tta.VerticalFlip(),
+    #             tta.Rotate90(angles=[90]),
+    #             tta.Scale(scales=[0.5, 0.75, 1.0, 1.25, 1.5], interpolation='bicubic', align_corners=False)
+    #         ]
+    #     )
+    #     model = tta.SegmentationTTAWrapper(model, transforms)
 
     test_dataset = config.test_dataset
 
@@ -99,13 +99,17 @@ def main():
             drop_last=False,
         )
         results = []
+        total_time = []
         for input in tqdm(test_loader):
             # raw_prediction NxCxHxW
-            raw_predictions = model(input['img'].cuda())
-
+            # print(input['img'].shape)
+            img = input['img'].cuda(config.gpus[0])
+            start = time.time()
+            raw_predictions = model(img)
+            end = time.time()
+            total_time.append(end - start)
             image_ids = input["img_id"]
             masks_true = input['gt_semantic_seg']
-
             raw_predictions = nn.Softmax(dim=1)(raw_predictions)
             predictions = raw_predictions.argmax(dim=1)
 
@@ -114,13 +118,14 @@ def main():
                 evaluator.add_batch(pre_image=mask, gt_image=masks_true[i].cpu().numpy())
                 mask_name = image_ids[i]
                 results.append((mask, str(args.output_path / mask_name), args.rgb))
-
+    mean_time = np.mean(np.array(total_time))
     iou_per_class = evaluator.Intersection_over_Union()
     f1_per_class = evaluator.F1()
     OA = evaluator.OA()
     for class_name, class_iou, class_f1 in zip(config.classes, iou_per_class, f1_per_class):
         print('F1_{}:{}, IOU_{}:{}'.format(class_name, class_f1, class_name, class_iou))
     print('F1:{}, mIOU:{}, OA:{}'.format(np.nanmean(f1_per_class[:-1]), np.nanmean(iou_per_class[:-1]), OA))
+    print('FPS:{:.2f}'.format(1 / mean_time))
     t0 = time.time()
     mpp.Pool(processes=mp.cpu_count()).map(img_writer, results)
     t1 = time.time()

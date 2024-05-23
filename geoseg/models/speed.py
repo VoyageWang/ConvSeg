@@ -5,7 +5,7 @@ from tqdm import tqdm
 import torch
 
 
-def flops_params_fps(model, input_shape=(1, 3, 512, 512)):
+def speed(model, input_shape=(1, 3, 512, 512)):
     """count flops:G params:M fps:img/s
         input shape tensor[1, c, h, w]
     """
@@ -26,4 +26,4 @@ def flops_params_fps(model, input_shape=(1, 3, 512, 512)):
         mean_time = np.mean(np.array(total_time))
         # print(model.__class__.__name__)
         print('img/s:{:.2f}'.format(1 / mean_time))
-        # print('flops:{:.2f}G params:{:.2f}M'.format(flops.total() / 1e9, params[''] / 1e6))
+        print('flops:{:.2f}G params:{:.2f}M'.format(flops.total() / 1e9, params[''] / 1e6))

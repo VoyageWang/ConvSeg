@@ -15,9 +15,9 @@ import random
 CLASSES = ('ImSurf', 'Building', 'LowVeg', 'Tree', 'Car', 'Clutter')
 PALETTE = [[255, 255, 255], [0, 0, 255], [0, 255, 255], [0, 255, 0], [255, 204, 0], [255, 0, 0]]
 
-ORIGIN_IMG_SIZE = (1024, 1024)
-INPUT_IMG_SIZE = (1024, 1024)
-TEST_IMG_SIZE = (1024, 1024)
+ORIGIN_IMG_SIZE = (512, 512)
+INPUT_IMG_SIZE = (512, 512)
+TEST_IMG_SIZE = (512, 512)
 
 def get_training_transform():
     train_transform = [
@@ -30,7 +30,7 @@ def get_training_transform():
 
 def train_aug(img, mask):
     crop_aug = Compose([RandomScale(scale_list=[0.75, 1.0, 1.25, 1.5], mode='value'),
-                        SmartCropV1(crop_size=768, max_ratio=0.75, ignore_index=len(CLASSES), nopad=False)])
+                        SmartCropV1(crop_size=512, max_ratio=0.75, ignore_index=len(CLASSES), nopad=False)]) #768
     img, mask = crop_aug(img, mask)
     img, mask = np.array(img), np.array(mask)
     aug = get_training_transform()(image=img.copy(), mask=mask.copy())
@@ -46,6 +46,8 @@ def get_val_transform():
 
 
 def val_aug(img, mask):
+    crop_aug = Compose([SmartCropV1(crop_size=512, max_ratio=0.75, ignore_index=len(CLASSES), nopad=False)]) #768
+    img, mask = crop_aug(img, mask)
     img, mask = np.array(img), np.array(mask)
     aug = get_val_transform()(image=img.copy(), mask=mask.copy())
     img, mask = aug['image'], aug['mask']
@@ -53,7 +55,7 @@ def val_aug(img, mask):
 
 
 class PotsdamDataset(Dataset):
-    def __init__(self, data_root='data/potsdam/test', mode='val', img_dir='images_1024', mask_dir='masks_1024',
+    def __init__(self, data_root=r'/data2/wangyuji/Geoseg/potsdam/test', mode='val', img_dir='images', mask_dir='masks',
                  img_suffix='.tif', mask_suffix='.png', transform=val_aug, mosaic_ratio=0.0,
                  img_size=ORIGIN_IMG_SIZE):
         self.data_root = data_root
@@ -90,6 +92,8 @@ class PotsdamDataset(Dataset):
     def get_img_ids(self, data_root, img_dir, mask_dir):
         img_filename_list = os.listdir(osp.join(data_root, img_dir))
         mask_filename_list = os.listdir(osp.join(data_root, mask_dir))
+        # print(img_filename_list)
+        # print(mask_filename_list)
         assert len(img_filename_list) == len(mask_filename_list)
         img_ids = [str(id.split('.')[0]) for id in mask_filename_list]
         return img_ids

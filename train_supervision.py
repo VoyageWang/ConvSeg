@@ -163,7 +163,7 @@ class Supervision_Train(pl.LightningModule):
 
         self.metrics_val.reset()
         loss = torch.stack([x["loss_val"] for x in outputs]).mean()
-        log_dict = {"val_loss": loss, 'val_mIoU': mIoU, 'val_F1': F1, 'val_OA': OA}
+        log_dict = {"val_loss": loss, 'val_mIoU': mIoU, 'val_F1': F1, 'val_OA': OA,'iou_class': iou_value}
         self.log_dict(log_dict, prog_bar=True)
 
     def configure_optimizers(self):

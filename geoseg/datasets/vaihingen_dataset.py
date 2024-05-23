@@ -29,6 +29,9 @@ def get_training_transform():
 
 
 def train_aug(img, mask):
+    # crop_aug = Compose([RandomScale(scale_list=[0.5, 0.75, 1.0, 1.25, 1.5], mode='value'),
+    #                     SmartCropV1(crop_size=512, max_ratio=0.75,
+    #                                 ignore_index=len(CLASSES), nopad=False)])
     crop_aug = Compose([RandomScale(scale_list=[0.5, 0.75, 1.0, 1.25, 1.5], mode='value'),
                         SmartCropV1(crop_size=512, max_ratio=0.75,
                                     ignore_index=len(CLASSES), nopad=False)])

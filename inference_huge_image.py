@@ -81,10 +81,10 @@ def uavid2rgb(mask):
 def get_args():
     parser = argparse.ArgumentParser()
     arg = parser.add_argument
-    arg("-i", "--image_path", type=Path, required=True, help="Path to  huge image folder")
-    arg("-c", "--config_path", type=Path, required=True, help="Path to  config")
-    arg("-o", "--output_path", type=Path, help="Path to save resulting masks.", required=True)
-    arg("-t", "--tta", help="Test time augmentation.", default=None, choices=[None, "d4", "lr"])
+    arg("-i", "--image_path", type=Path, default=r'/home/featurize/data/potsdam/test_image', help="Path to  huge image folder")
+    arg("-c", "--config_path", type=Path, default="GeoSeg/config/potsdam/segmenter.py", help="Path to  config")
+    arg("-o", "--output_path", type=Path, default="fig_results/potsdam/segmenter_huge", help="Path to save resulting masks.")
+    arg("-t", "--tta", help="Test time augmentation.", default='lr', choices=[None, "d4", "lr"])
     arg("-ph", "--patch-height", help="height of patch size", type=int, default=512)
     arg("-pw", "--patch-width", help="width of patch size", type=int, default=512)
     arg("-b", "--batch-size", help="batch size", type=int, default=2)
@@ -149,7 +149,7 @@ def main():
     config = py2cfg(args.config_path)
     model = Supervision_Train.load_from_checkpoint(os.path.join(config.weights_path, config.test_weights_name+'.ckpt'), config=config)
 
-    model.cuda()
+    model.cuda(config.gpus[0])
     model.eval()
 
     if args.tta == "lr":
@@ -193,7 +193,7 @@ def main():
                                     drop_last=False, shuffle=False)
             for input in tqdm(dataloader):
                 # raw_prediction NxCxHxW
-                raw_predictions = model(input['img'].cuda())
+                raw_predictions = model(input['img'].cuda(config.gpus[0]))
                 # print('raw_pred shape:', raw_predictions.shape)
                 raw_predictions = nn.Softmax(dim=1)(raw_predictions)
                 # input_images['features'] NxCxHxW C=3
@@ -214,6 +214,19 @@ def main():
 
         output_mask = output_mask[-img_shape[0]:, -img_shape[1]:]
 
+        # if height_pad != 0 and width_pad == 0:
+        #     h_index = height_pad // 2
+        #     output_mask = output_mask[h_index:-h_index, :]
+        # elif height_pad == 0 and width_pad != 0:
+        #     w_index = width_pad // 2
+        #     output_mask = output_mask[:, w_index:-w_index]
+        # elif height_pad != 0 and width_pad != 0:
+        #     h_index = height_pad // 2
+        #     w_index = width_pad // 2
+        #     output_mask = output_mask[h_index:-h_index:, w_index:-w_index]
+        # else:
+        #     output_mask = output_mask
+
         # print('mask', output_mask.shape)
         if args.dataset == 'landcoverai':
             output_mask = landcoverai_to_rgb(output_mask)
@@ -225,7 +238,7 @@ def main():
             output_mask = building_to_rgb(output_mask)
         else:
             output_mask = output_mask
-        # print(img_shape, output_mask.shape)
+        print(img_shape, output_mask.shape)
         # assert img_shape == output_mask.shape
         cv2.imwrite(os.path.join(args.output_path, img_name), output_mask)
 

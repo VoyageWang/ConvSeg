@@ -1,32 +1,25 @@
-# ---------------------------------------------------------------
-# Copyright (c) 2021, NVIDIA Corporation. All rights reserved.
-#
-# This work is licensed under the NVIDIA Source Code License
-# ---------------------------------------------------------------
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from torch import nn
 from functools import partial
-
+import torch.nn.functional as f
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
-from timm.models.registry import register_model
-from timm.models.vision_transformer import _cfg
-
+# from flops_params_fps_count import flops_params_fps
 import math
+import time
 
-
+# encoder 输出的本来就是四个特征图
 class Mlp(nn.Module):
-    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
+    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.): # 这个hidden feature 一般取的是in features 的4倍
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
         self.fc1 = nn.Linear(in_features, hidden_features)
-        self.dwconv = DWConv(hidden_features)
+        self.dwconv = DWConv(hidden_features) # 这个是做3×3卷积，然后能够得到位置信息, shape是保持不变的，并没有下采样
         self.act = act_layer()
         self.fc2 = nn.Linear(hidden_features, out_features)
         self.drop = nn.Dropout(drop)
 
-        self.apply(self._init_weights)
+        self.apply(self._init_weights) # 从父类那里继承过来的方法，初始化参数用的
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -54,6 +47,60 @@ class Mlp(nn.Module):
 
 
 class Attention(nn.Module):
+    def __init__(self, dim, num_heads,qkv_bias = None,qk_scale=None,attn_drop = 0., proj_drop = 0.,sr_ratio = None ): # token的维度，QKV的维度都是一样的
+        super(Attention, self).__init__()
+        assert dim % num_heads == 0, f"dim {dim} should be divided by num_heads {num_heads}."
+
+        self.dim = dim
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim ** -0.5
+
+        self.q = nn.Linear(dim,dim, bias=qkv_bias)
+        self.k = nn.Linear(dim, dim , bias=qkv_bias)
+        self.v = nn.Linear(dim, dim , bias=qkv_bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Conv2d(dim, dim, 1)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+    def forward(self,x,H,W):
+        B,N,C = x.shape
+        keys = self.k(x).reshape((B, self.dim, N))
+        queries = self.q(x).reshape((B, self.dim, N))
+        values = self.v(x).reshape((B, self.dim, N))
+        head_key_channels = self.head_dim
+        head_value_channels = self.head_dim
+
+        attended_values = []
+        for i in range(self.num_heads):
+            key = f.softmax(keys[
+                :,
+                i * head_key_channels: (i + 1) * head_key_channels,
+                :
+            ], dim=2)
+            query = f.softmax(queries[
+                :,
+                i * head_key_channels: (i + 1) * head_key_channels,
+                :
+            ], dim=1)
+            value = values[
+                :,
+                i * head_value_channels: (i + 1) * head_value_channels,
+                :
+            ]
+            context = key @ value.transpose(1, 2)
+            attended_value = (
+                context.transpose(1, 2) @ query
+            ).reshape(B, head_value_channels, H, W)
+            attended_values.append(attended_value)
+
+        aggregated_values = torch.cat(attended_values, dim=1)
+        reprojected_value = self.proj(aggregated_values)
+        attention = reprojected_value + x.reshape(B,C,H,W)
+
+        return attention.reshape(B,N,C)
+
+class EAttention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0., sr_ratio=1):
         super().__init__()
         assert dim % num_heads == 0, f"dim {dim} should be divided by num_heads {num_heads}."
@@ -115,10 +162,12 @@ class Attention(nn.Module):
         return x
 
 
-class Block(nn.Module):
+# 把attention和mlp叠在一起先，因为这个模块会重复很多遍，根据设置的参数depths决定
+# 这个模块中用到了残差连接，但是论文中没有提出
+class Block1(nn.Module):
 
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
-                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, sr_ratio=1):
+                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, sr_ratio=1): # layer norm不同于batch norm，对于sequence来说layer norm的效果更好
         super().__init__()
         self.norm1 = norm_layer(dim)
         self.attn = Attention(
@@ -154,7 +203,86 @@ class Block(nn.Module):
 
         return x
 
+class Block2(nn.Module):
 
+    def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
+                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, sr_ratio=1): # layer norm不同于batch norm，对于sequence来说layer norm的效果更好
+        super().__init__()
+        self.norm1 = norm_layer(dim)
+        self.attn = EAttention(
+            dim,
+            num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+            attn_drop=attn_drop, proj_drop=drop, sr_ratio=sr_ratio)
+        # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.norm2 = norm_layer(dim)
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.Conv2d):
+            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+            fan_out //= m.groups
+            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
+            if m.bias is not None:
+                m.bias.data.zero_()
+
+    def forward(self, x, H, W):
+        x = x + self.drop_path(self.attn(self.norm1(x), H, W))
+        x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
+
+        return x
+
+class Block3(nn.Module):
+
+    def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
+                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, sr_ratio=1): # layer norm不同于batch norm，对于sequence来说layer norm的效果更好
+        super().__init__()
+        self.norm1 = norm_layer(dim)
+        self.attn = EAttention(
+            dim,
+            num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+            attn_drop=attn_drop, proj_drop=drop, sr_ratio=sr_ratio)
+        # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.norm2 = norm_layer(dim)
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.Conv2d):
+            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+            fan_out //= m.groups
+            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
+            if m.bias is not None:
+                m.bias.data.zero_()
+
+    def forward(self, x, H, W):
+        x = x + self.drop_path(self.norm1(x))
+        x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
+
+        return x
+
+
+# 做词嵌入的
 class OverlapPatchEmbed(nn.Module):
     """ Image to Patch Embedding
     """
@@ -202,16 +330,20 @@ class MixVisionTransformer(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dims=[64, 128, 256, 512],
                  num_heads=[1, 2, 4, 8], mlp_ratios=[4, 4, 4, 4], qkv_bias=False, qk_scale=None, drop_rate=0.,
                  attn_drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
-                 depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1]):
+                 depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1]): # depths表示的是那个最基本的block有几层
         super().__init__()
         self.num_classes = num_classes
         self.depths = depths
 
         # patch_embed
+        '''
+        这里做一点说明，这里写的patch_size的大小是7，stride=4，不像是VIT模型那样两个值都是patch-size，因为这篇文章提出的是带有overlap的embedded
+        所以他会做padding，保证最后的patch——size就是预设的4×4
+        '''
         self.patch_embed1 = OverlapPatchEmbed(img_size=img_size, patch_size=7, stride=4, in_chans=in_chans,
-                                              embed_dim=embed_dims[0])
+                                              embed_dim=embed_dims[0]) # 下采样四倍倍
         self.patch_embed2 = OverlapPatchEmbed(img_size=img_size // 4, patch_size=3, stride=2, in_chans=embed_dims[0],
-                                              embed_dim=embed_dims[1])
+                                              embed_dim=embed_dims[1]) #下采样两倍
         self.patch_embed3 = OverlapPatchEmbed(img_size=img_size // 8, patch_size=3, stride=2, in_chans=embed_dims[1],
                                               embed_dim=embed_dims[2])
         self.patch_embed4 = OverlapPatchEmbed(img_size=img_size // 16, patch_size=3, stride=2, in_chans=embed_dims[2],
@@ -220,7 +352,7 @@ class MixVisionTransformer(nn.Module):
         # transformer encoder
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
         cur = 0
-        self.block1 = nn.ModuleList([Block(
+        self.block1 = nn.ModuleList([Block1(
             dim=embed_dims[0], num_heads=num_heads[0], mlp_ratio=mlp_ratios[0], qkv_bias=qkv_bias, qk_scale=qk_scale,
             drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[cur + i], norm_layer=norm_layer,
             sr_ratio=sr_ratios[0])
@@ -228,7 +360,7 @@ class MixVisionTransformer(nn.Module):
         self.norm1 = norm_layer(embed_dims[0])
 
         cur += depths[0]
-        self.block2 = nn.ModuleList([Block(
+        self.block2 = nn.ModuleList([Block3(
             dim=embed_dims[1], num_heads=num_heads[1], mlp_ratio=mlp_ratios[1], qkv_bias=qkv_bias, qk_scale=qk_scale,
             drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[cur + i], norm_layer=norm_layer,
             sr_ratio=sr_ratios[1])
@@ -236,7 +368,7 @@ class MixVisionTransformer(nn.Module):
         self.norm2 = norm_layer(embed_dims[1])
 
         cur += depths[1]
-        self.block3 = nn.ModuleList([Block(
+        self.block3 = nn.ModuleList([Block2(
             dim=embed_dims[2], num_heads=num_heads[2], mlp_ratio=mlp_ratios[2], qkv_bias=qkv_bias, qk_scale=qk_scale,
             drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[cur + i], norm_layer=norm_layer,
             sr_ratio=sr_ratios[2])
@@ -244,7 +376,7 @@ class MixVisionTransformer(nn.Module):
         self.norm3 = norm_layer(embed_dims[2])
 
         cur += depths[2]
-        self.block4 = nn.ModuleList([Block(
+        self.block4 = nn.ModuleList([Block2(
             dim=embed_dims[3], num_heads=num_heads[3], mlp_ratio=mlp_ratios[3], qkv_bias=qkv_bias, qk_scale=qk_scale,
             drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[cur + i], norm_layer=norm_layer,
             sr_ratio=sr_ratios[3])
@@ -271,7 +403,11 @@ class MixVisionTransformer(nn.Module):
             if m.bias is not None:
                 m.bias.data.zero_()
 
-    
+    # def init_weights(self, pretrained=None):
+    #     if isinstance(pretrained, str):
+    #         logger = get_root_logger()
+    #         load_checkpoint(self, pretrained, map_location='cpu', strict=False, logger=logger)
+
     def reset_drop_path(self, drop_path_rate):
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(self.depths))]
         cur = 0
@@ -309,15 +445,15 @@ class MixVisionTransformer(nn.Module):
         outs = []
 
         # stage 1
-        x, H, W = self.patch_embed1(x)
+        x, H, W = self.patch_embed1(x) # H,W 是输入图像下采样之后的高宽 相乘以后就是词的个数
         for i, blk in enumerate(self.block1):
-            x = blk(x, H, W)
+            x = blk(x, H, W) # 这个时候输出的高宽是不会改变的，也就是N = H*W
         x = self.norm1(x)
-        x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
-        outs.append(x)
+        x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous() # 把那个sequence还原成图像，也就是得到了第一个feature map
+        outs.append(x)                                             # 这里其实就是那个patch mergeing模块
 
         # stage 2
-        x, H, W = self.patch_embed2(x)
+        x, H, W = self.patch_embed2(x) # 然后紧接着就跟上了embedding
         for i, blk in enumerate(self.block2):
             x = blk(x, H, W)
         x = self.norm2(x)
@@ -338,9 +474,10 @@ class MixVisionTransformer(nn.Module):
             x = blk(x, H, W)
         x = self.norm4(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
+        x = torch.zeros_like(x)
         outs.append(x)
 
-        return outs
+        return outs  # 这里输出的是一个list，里面的四个元素就是四个不同尺度的feature map
 
     def forward(self, x):
         x = self.forward_features(x)
@@ -349,12 +486,12 @@ class MixVisionTransformer(nn.Module):
         return x
 
 
-class DWConv(nn.Module):
+class DWConv(nn.Module): # 用3×3卷积实现位置编码
     def __init__(self, dim=768):
         super(DWConv, self).__init__()
         self.dwconv = nn.Conv2d(dim, dim, 3, 1, 1, bias=True, groups=dim)
 
-    def forward(self, x, H, W):
+    def forward(self, x, H, W): # 先把序列化成图像，然后再化成序列输出
         B, N, C = x.shape
         x = x.transpose(1, 2).view(B, C, H, W)
         x = self.dwconv(x)
@@ -362,61 +499,6 @@ class DWConv(nn.Module):
 
         return x
 
-
-
-
-class mit_b0(MixVisionTransformer):
-    def __init__(self, **kwargs):
-        super(mit_b0, self).__init__(
-            patch_size=4, embed_dims=[32, 64, 160, 256], num_heads=[1, 2, 5, 8], mlp_ratios=[4, 4, 4, 4],
-            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[2, 2, 2, 2], sr_ratios=[8, 4, 2, 1],
-            drop_rate=0.0, drop_path_rate=0.1)
-
-
-
-class mit_b1(MixVisionTransformer):
-    def __init__(self, **kwargs):
-        super(mit_b1, self).__init__(
-            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[4, 4, 4, 4],
-            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[2, 2, 2, 2], sr_ratios=[8, 4, 2, 1],
-            drop_rate=0.0, drop_path_rate=0.1)
-
-
-
-class mit_b2(MixVisionTransformer):
-    def __init__(self, **kwargs):
-        super(mit_b2, self).__init__(
-            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[4, 4, 4, 4],
-            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 4, 6, 3], sr_ratios=[8, 4, 2, 1],
-            drop_rate=0.0, drop_path_rate=0.1)
-
-
-
-class mit_b3(MixVisionTransformer):
-    def __init__(self, **kwargs):
-        super(mit_b3, self).__init__(
-            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[4, 4, 4, 4],
-            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 4, 18, 3], sr_ratios=[8, 4, 2, 1],
-            drop_rate=0.0, drop_path_rate=0.1)
-
-
-
-class mit_b4(MixVisionTransformer):
-    def __init__(self, **kwargs):
-        super(mit_b4, self).__init__(
-            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[4, 4, 4, 4],
-            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 8, 27, 3], sr_ratios=[8, 4, 2, 1],
-            drop_rate=0.0, drop_path_rate=0.1)
-
-
-
-class mit_b5(MixVisionTransformer):
-    def __init__(self, **kwargs):
-        super(mit_b5, self).__init__(
-            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[4, 4, 4, 4],
-            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 6, 40, 3], sr_ratios=[8, 4, 2, 1],
-            drop_rate=0.0, drop_path_rate=0.1)
-        
 
 class Decoder(nn.Module):
     def __init__(self,dim_out_encoder=[32,64, 128, 256], decoder_dim=256, num_class=20, scale_factor = 2,batch_norm = nn.BatchNorm2d,active=nn.ReLU() ):
@@ -444,6 +526,7 @@ class Decoder(nn.Module):
 
 
     def forward(self,out_encoder):
+        # mask = torch.zeros_like(out_encoder[3])
         x3 = self.up_sample1(out_encoder[3])
         # print(x3.shape)
         xd = self.up_sample3(out_encoder[3])
@@ -460,7 +543,7 @@ class Decoder(nn.Module):
         x = self.act(self.bn1(self.linear_out(x)))
         return self.up_sample2(x)
         # return x
-        
+
 class Segformer(nn.Module):
     def __init__(self,img_size=512, patch_size=16, in_chans=3, num_classes=20, embed_dims=[64, 128, 256, 512],
                  num_heads=[1, 2, 4, 8], mlp_ratios=[4, 4, 4, 4], qkv_bias=False, qk_scale=None, drop_rate=0.,
@@ -482,11 +565,18 @@ class Segformer(nn.Module):
         out1 = self.decoder(out)
         return out1
         # return out[0]
+
+
+
 if __name__ == '__main__':
-    model = Segformer(img_size=512, patch_size=4, in_chans=3, num_classes=6, embed_dims=[ 40,80, 160,320 ],
+    import os
+
+# 设置CUDA_VISIBLE_DEVICES环境变量，指定程序运行在第一块GPU上
+    os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+    model = Segformer(img_size=512, patch_size=4, in_chans=3, num_classes=6, embed_dims=[ 40, 80, 160, 320 ],
                  num_heads=[4, 4, 8, 16], mlp_ratios=[4, 4, 4, 4], qkv_bias=False, qk_scale=None, drop_rate=0.,
                  attn_drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
-                 depths=[3,4,6,4], sr_ratios=[8, 4, 2, 1])
+                 depths=[3,4,16,0], sr_ratios=[8, 4, 2, 1])
     # flops_params_fps(model, input_shape=(1, 3, 512, 512))
 #     device = torch.device('cuda' if torch.cuda.is_available() else "cpu")
 #     model = Segformer(img_size=224,patch_size=4, embed_dims=[32, 64, 160, 256], num_heads=[1, 2, 5, 8], mlp_ratios=[4, 4, 4, 4],
@@ -497,10 +587,9 @@ if __name__ == '__main__':
     # model.cuda()
     # # model.cuda()
     # # img.to('cuda')
-    # # s = time.time()
+    # s = time.time()
     # prd = model(img)
-    # print(prd.shape)
-    from speed import speed
-    speed(model)
     # e = time.time()-s
     # print(e)
+    from speed import speed
+    speed(model)

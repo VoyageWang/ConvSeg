@@ -1,60 +1,8 @@
-## Version 2.0 (stable)
+# efficient_hybrid_transformer
+Paper: Efficient Hybrid Transformer: Learning Global-local Context for Urban Sence Segmentation
+# ConvSeg
+The official implementation of our paper '' CONVOLUTION MEETS TRANSFORMER: EFFICIENT HYBRID TRANSFORMER FOR SEMANTIC SEGMENTATION WITH VERY HIGH RESOLUTION IMAGERY''
 
-[Welcome to my homepage!](https://WangLibo1995.github.io)
-
-## News 
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/transformer-meets-dcfam-a-novel-semantic/semantic-segmentation-on-isprs-potsdam)](https://paperswithcode.com/sota/semantic-segmentation-on-isprs-potsdam?p=transformer-meets-dcfam-a-novel-semantic)
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/transformer-meets-dcfam-a-novel-semantic/semantic-segmentation-on-isprs-vaihingen)](https://paperswithcode.com/sota/semantic-segmentation-on-isprs-vaihingen?p=transformer-meets-dcfam-a-novel-semantic)
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/efficient-hybrid-transformer-learning-global/semantic-segmentation-on-uavid)](https://paperswithcode.com/sota/semantic-segmentation-on-uavid?p=efficient-hybrid-transformer-learning-global)
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/efficient-hybrid-transformer-learning-global/semantic-segmentation-on-loveda)](https://paperswithcode.com/sota/semantic-segmentation-on-loveda?p=efficient-hybrid-transformer-learning-global)
-
-- I have updated this repo to pytorch 2.0 and pytorch-lightning 2.0, support multi-gpu training, etc. 
-- Pretrained Weights of backbones can be access from [Google Drive](https://drive.google.com/drive/folders/1ELpFKONJZbXmwB5WCXG7w42eHtrXzyPn?usp=sharing)
-- [UNetFormer](https://www.sciencedirect.com/science/article/pii/S0924271622001654) (accepted by ISPRS, [PDF](https://www.researchgate.net/profile/Libo-Wang-17/publication/361736439_UNetFormer_A_UNet-like_transformer_for_efficient_semantic_segmentation_of_remote_sensing_urban_scene_imagery/links/62c2a1ed1cbf3a1d12ac1c87/UNetFormer-A-UNet-like-transformer-for-efficient-semantic-segmentation-of-remote-sensing-urban-scene-imagery.pdf)) and **UAVid dataset** are supported.
-- ISPRS Vaihingen and Potsdam datasets are supported. Since private sharing is not allowed, you need to download the datasets from the official website and split them by **Folder Structure**.
-- More networks are updated and the link of pretrained weights is provided.
-- **config/loveda/dcswin.py** provides a detailed explain about **config** setting.
-- Inference on huge RS images are supported (inference_huge_image.py).
-
-## Introduction
-
-**GeoSeg** is an open-source  semantic segmentation toolbox based on PyTorch, [pytorch lightning](https://www.pytorchlightning.ai/) and [timm](https://github.com/rwightman/pytorch-image-models), 
-which mainly focuses on developing advanced Vision Transformers for remote sensing image segmentation.
-
-
-## Major Features
-
-- Unified Benchmark
-
-  we provide a unified training script for various segmentation methods.
-  
-- Simple and Effective
-
-  Thanks to **pytorch lightning** and **timm** , the code is easy for further development.
-  
-- Supported Remote Sensing Datasets
- 
-  - [ISPRS Vaihingen and Potsdam](https://www.isprs.org/education/benchmarks/UrbanSemLab/default.aspx) 
-  - [UAVid](https://uavid.nl/)
-  - [LoveDA](https://codalab.lisn.upsaclay.fr/competitions/421)
-  - More datasets will be supported in the future.
-  
-- Multi-scale Training and Testing
-- Inference on Huge Remote Sensing Images
-
-## Supported Networks
-
-- Vision Transformer
-
-  - [UNetFormer](https://authors.elsevier.com/a/1fIji3I9x1j9Fs) 
-  - [DC-Swin](https://ieeexplore.ieee.org/abstract/document/9681903)
-  - [BANet](https://www.mdpi.com/2072-4292/13/16/3065)
-  
-- CNN
- 
-  - [MANet](https://ieeexplore.ieee.org/abstract/document/9487010) 
-  - [ABCNet](https://www.sciencedirect.com/science/article/pii/S0924271621002379)
-  - [A2FPN](https://www.tandfonline.com/doi/full/10.1080/01431161.2022.2030071)
   
 ## Folder Structure
 
